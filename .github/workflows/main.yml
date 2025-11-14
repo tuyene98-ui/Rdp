@@ -7,43 +7,44 @@ jobs:
   secure-rdp:
     runs-on: windows-latest
 
-    # 3600 minutes = 60 hours (you requested)
+    # 3600 minutes = 60 hours runtime
     timeout-minutes: 3600
 
     env:
-      # optional: you can define WALLPAPER_URL as a repo secret (recommended if hosted externally)
+      # Optional: you can set WALLPAPER_URL as a repo secret if you host the generated image externally
       WALLPAPER_URL: ${{ secrets.WALLPAPER_URL }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Configure RDP & firewall (enable RDP, disable NLA)
+      - name: Configure RDP & Firewall
         shell: pwsh
         run: |
+          Write-Host "Enabling Remote Desktop and opening firewall port 3389..."
+          # Enable Remote Desktop
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0 -Force
-          # disable Network Level Authentication if needed (optional)
+          # Optionally disable NLA if needed (makes some RDP clients easier to use)
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'SecurityLayer' -Value 0 -Force
 
-          # Allow inbound 3389 (Tailscale will provide private connectivity)
+          # Create firewall rule for testing via Tailscale private network
           netsh advfirewall firewall delete rule name="RDP-Tailscale" || Write-Host "no existing rule"
           netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
 
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP user with secure random password
+      - name: Create or update local RDP user (secure random password)
         shell: pwsh
         run: |
-          # create / update local user "RDP" and set random strong password (16 chars)
+          Write-Host "Creating/updating local user RDP..."
           $chars = (@(65..90) + @(97..122) + @(48..57) + @(33..47) + @(58..64) + @(91..96) + @(123..126)) | ForEach-Object {[char]$_}
-          $pw = -join ($chars | Get-Random -Count 16)
-          $secure = ConvertTo-SecureString $pw -AsPlainText -Force
+          $password = -join ($chars | Get-Random -Count 16)
+          $secure = ConvertTo-SecureString $password -AsPlainText -Force
 
           if (-not (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
             New-LocalUser -Name "RDP" -Password $secure -AccountNeverExpires -PasswordNeverExpires
           } else {
-            # update password if exists
             $u = Get-LocalUser -Name "RDP"
             $u | Set-LocalUser -Password $secure
           }
@@ -51,88 +52,98 @@ jobs:
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
 
+          # Export credentials to environment for later printing
           echo "RDP_USER=RDP" >> $env:GITHUB_ENV
-          echo "RDP_PASS=$pw" >> $env:GITHUB_ENV
+          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
       - name: Install Tailscale
         shell: pwsh
         run: |
+          Write-Host "Installing Tailscale..."
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
           $installer = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installer
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installer -UseBasicParsing
           Start-Process -FilePath msiexec.exe -ArgumentList "/i `"$installer`" /quiet /norestart" -Wait
           Remove-Item $installer -Force
 
-      - name: Connect Tailscale
+      - name: Connect to Tailscale
         shell: pwsh
         run: |
-          # requires secret: TAILSCALE_AUTH_KEY in repo secrets
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          Write-Host "Bringing up Tailscale with auth key (from secrets)..."
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname="gh-runner-${{ github.run_id }}"
 
           $ip = $null
           $tries = 0
           while (-not $ip -and $tries -lt 20) {
-            $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+            $ip = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4) -join "`n"
+            if ($ip -and $ip.Trim()) { break }
             Start-Sleep -Seconds 3
             $tries++
           }
 
-          if (-not $ip) { Write-Error "Tailscale IP not available"; exit 1 }
-
-          echo "TS_IP=$ip" >> $env:GITHUB_ENV
-
-      - name: Verify RDP accessibility via Tailscale
-        shell: pwsh
-        run: |
-          $ok = Test-NetConnection -ComputerName $env:TS_IP -Port 3389
-          if (-not $ok.TcpTestSucceeded) { Write-Error "RDP port not reachable via Tailscale"; exit 1 }
-          Write-Host "RDP reachable at $env:TS_IP"
-
-      - name: Acquire wallpaper (repo priority, else download from URL, else find any image)
-        shell: pwsh
-        run: |
-          # Priority A: .github/images/wallpaper.jpg
-          $repoPath = Join-Path $env:GITHUB_WORKSPACE ".github/images/wallpaper.jpg"
-          $selected = $null
-
-          if (Test-Path $repoPath) {
-            $selected = Get-Item $repoPath
-          } else {
-            # Priority B: WALLPAPER_URL env/secret
-            if ($env:WALLPAPER_URL) {
-              $dl = "$env:TEMP\wallpaper_download"
-              Invoke-WebRequest -Uri $env:WALLPAPER_URL -OutFile $dl -UseBasicParsing -ErrorAction SilentlyContinue
-              if (Test-Path $dl) { $selected = Get-Item $dl }
-            }
+          if (-not $ip) {
+            Write-Error "Tailscale IP not available - aborting."
+            exit 1
           }
 
-          # Priority C: any image in repo (fallback)
+          Write-Host "Tailscale IP: $ip"
+          echo "TS_IP=$ip" >> $env:GITHUB_ENV
+
+      - name: Verify RDP Port via Tailscale
+        shell: pwsh
+        run: |
+          Write-Host "Testing TCP connectivity to port 3389 on Tailscale IP..."
+          $test = Test-NetConnection -ComputerName $env:TS_IP -Port 3389 -WarningAction SilentlyContinue
+          if (-not $test.TcpTestSucceeded) {
+            Write-Error "RDP port 3389 is not reachable via Tailscale. Please check Tailscale ACLs/network."
+            exit 1
+          }
+          Write-Host "RDP port reachable."
+
+      - name: Acquire and install wallpaper
+        shell: pwsh
+        run: |
+          Write-Host "Selecting wallpaper..."
+          $selected = $null
+          $repoPreferred = Join-Path $env:GITHUB_WORKSPACE ".github/images/wallpaper.jpg"
+
+          if (Test-Path $repoPreferred) {
+            Write-Host "Found .github/images/wallpaper.jpg in repo."
+            $selected = Get-Item $repoPreferred
+          } elseif ($env:WALLPAPER_URL) {
+            Write-Host "Downloading wallpaper from WALLPAPER_URL..."
+            $dl = "$env:TEMP\wallpaper_download"
+            Invoke-WebRequest -Uri $env:WALLPAPER_URL -OutFile $dl -UseBasicParsing -ErrorAction SilentlyContinue
+            if (Test-Path $dl) { $selected = Get-Item $dl }
+          }
+
           if (-not $selected) {
+            Write-Host "Fallback: searching repo for any image..."
             $any = Get-ChildItem -Path $env:GITHUB_WORKSPACE -Recurse -Include *.jpg,*.jpeg,*.png -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($any) { $selected = $any }
           }
 
           if (-not $selected) {
-            Write-Host "No wallpaper found (repo or URL). Skipping wallpaper step."
+            Write-Host "No wallpaper available in repo or WALLPAPER_URL. Skipping wallpaper step."
             exit 0
           }
 
           Write-Host "Using wallpaper: $($selected.FullName)"
 
-          # Copy into RDP user's Pictures folder
-          $rdpPics = "C:\Users\RDP\Pictures"
-          if (-not (Test-Path $rdpPics)) { New-Item -Path $rdpPics -ItemType Directory -Force | Out-Null }
-          $dst = Join-Path $rdpPics "greenboymc_wallpaper.jpg"
+          # Copy to RDP user's Pictures folder
+          $dstFolder = "C:\Users\RDP\Pictures"
+          if (-not (Test-Path $dstFolder)) { New-Item -Path $dstFolder -ItemType Directory -Force | Out-Null }
+          $dst = Join-Path $dstFolder "greenboymc_wallpaper.jpg"
           Copy-Item -Path $selected.FullName -Destination $dst -Force
 
-          # Update RDP user's registry (HKEY_USERS\<SID>\Control Panel\Desktop)
+          # Update RDP user's registry hive so wallpaper applies when they log in
           $user = Get-LocalUser -Name "RDP"
-          if (-not $user) { Write-Error "RDP user not found"; exit 1 }
+          if (-not $user) { Write-Error "RDP user missing"; exit 1 }
           $sid = $user.SID.Value
           $regKey = "Registry::HKEY_USERS\$sid\Control Panel\Desktop"
 
           if (-not (Test-Path $regKey)) {
-            # create keys if missing (user may not have logged in)
+            # Create keys if missing (user hasn't logged in yet)
             New-Item -Path "Registry::HKEY_USERS\$sid" -Name "Control Panel" -Force -ErrorAction SilentlyContinue | Out-Null
             New-Item -Path $regKey -Force | Out-Null
           }
@@ -140,16 +151,26 @@ jobs:
           # Set both common names to be safe
           Set-ItemProperty -Path $regKey -Name "WallPaper" -Value $dst -Force
           Set-ItemProperty -Path $regKey -Name "Wallpaper" -Value $dst -Force
-          Set-ItemProperty -Path $regKey -Name "WallpaperStyle" -Value "10" -Force   # 10 = Fill
+          Set-ItemProperty -Path $regKey -Name "WallpaperStyle" -Value "10" -Force
           Set-ItemProperty -Path $regKey -Name "TileWallpaper" -Value "0" -Force
 
-          # Also copy public fallback (applies to current sessions)
+          # Also place a public copy for current sessions
           Copy-Item -Path $selected.FullName -Destination "C:\Users\Public\wallpaper_greenboymc.jpg" -Force
           reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v Wallpaper /t REG_SZ /d "C:\Users\Public\wallpaper_greenboymc.jpg" /f | Out-Null
 
-          Write-Host "Wallpaper installed to $dst and registry updated for RDP user (SID=$sid)."
+          Write-Host "Wallpaper installed and registry updated for user RDP (SID=$sid)."
 
-      - name: Show banner and keep runner alive
+      - name: Optional: Notes about removing TEST MODE watermark
+        shell: pwsh
+        run: |
+          Write-Host "If you see 'Test Mode' watermark in the desktop, removal requires a reboot and admin-level bcdedit changes."
+          Write-Host "Manual commands (run locally as Administrator on target machine):"
+          Write-Host "  bcdedit -set TESTSIGNING OFF"
+          Write-Host "  bcdedit -set nointegritychecks off"
+          Write-Host "Then reboot the machine."
+          Write-Host "This workflow will not reboot the runner automatically."
+
+      - name: Show banner & keep runner alive
         shell: pwsh
         run: |
           Write-Host ""
@@ -160,8 +181,9 @@ jobs:
           Write-Host ""
           Write-Host "=== RDP LOGIN INFO ==="
           Write-Host "🌍 TS_IP: $env:TS_IP"
-          Write-Host "👤 USER: $env:RDP_USER"
-          Write-Host "🔐 PASS: $env:RDP_PASS"
+          Write-Host "👤 USER : $env:RDP_USER"
+          Write-Host "🔐 PASS : $env:RDP_PASS"
+          Write-Host "Runtime: 60 hours"
           Write-Host "========================="
           Write-Host ""
           while ($true) {
