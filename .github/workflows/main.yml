@@ -1,4 +1,4 @@
-name: RDP
+name: RDP with GreenboyMC Wallpaper
 
 on:
   workflow_dispatch:
@@ -6,102 +6,165 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 3500   # ~6 tiếng
+
+    # 3600 minutes = 60 hours (you requested)
+    timeout-minutes: 3600
+
+    env:
+      # optional: you can define WALLPAPER_URL as a repo secret (recommended if hosted externally)
+      WALLPAPER_URL: ${{ secrets.WALLPAPER_URL }}
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      # -------------------------
-      # 1) Core RDP Settings
-      # -------------------------
-      - name: Enable Remote Desktop
+      - name: Configure RDP & firewall (enable RDP, disable NLA)
         shell: pwsh
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
-          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0 -Force
+          # disable Network Level Authentication if needed (optional)
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'SecurityLayer' -Value 0 -Force
 
-      # -------------------------
-      # 2) Create RDP User
-      # -------------------------
-      - name: Create RDP User
+          # Allow inbound 3389 (Tailscale will provide private connectivity)
+          netsh advfirewall firewall delete rule name="RDP-Tailscale" || Write-Host "no existing rule"
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+
+          Restart-Service -Name TermService -Force
+
+      - name: Create RDP user with secure random password
         shell: pwsh
         run: |
-          $pass = -join ((33..122) | Get-Random -Count 16 | ForEach-Object {[char]$_})
-          $secure = ConvertTo-SecureString $pass -AsPlainText -Force
+          # create / update local user "RDP" and set random strong password (16 chars)
+          $chars = (@(65..90) + @(97..122) + @(48..57) + @(33..47) + @(58..64) + @(91..96) + @(123..126)) | ForEach-Object {[char]$_}
+          $pw = -join ($chars | Get-Random -Count 16)
+          $secure = ConvertTo-SecureString $pw -AsPlainText -Force
 
-          New-LocalUser -Name "RDP" -Password $secure -AccountNeverExpires
+          if (-not (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
+            New-LocalUser -Name "RDP" -Password $secure -AccountNeverExpires -PasswordNeverExpires
+          } else {
+            # update password if exists
+            $u = Get-LocalUser -Name "RDP"
+            $u | Set-LocalUser -Password $secure
+          }
+
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          echo "RDP_PASS=$pass" >> $env:GITHUB_ENV
-          echo "RDP_USER=RDP" >> $env:GITHUB_ENV
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
 
-      # -------------------------
-      # 3) Install Tailscale
-      # -------------------------
+          echo "RDP_USER=RDP" >> $env:GITHUB_ENV
+          echo "RDP_PASS=$pw" >> $env:GITHUB_ENV
+
       - name: Install Tailscale
         shell: pwsh
         run: |
-          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
-          $path = "$env:TEMP\ts.msi"
-          Invoke-WebRequest $url -OutFile $path
-          Start-Process msiexec.exe -ArgumentList "/i `"$path`" /quiet /norestart" -Wait
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $installer = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installer
+          Start-Process -FilePath msiexec.exe -ArgumentList "/i `"$installer`" /quiet /norestart" -Wait
+          Remove-Item $installer -Force
 
-      # -------------------------
-      # 4) Connect to Tailscale
-      # -------------------------
-      - name: Connect to Tailscale
+      - name: Connect Tailscale
         shell: pwsh
         run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }}
+          # requires secret: TAILSCALE_AUTH_KEY in repo secrets
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
 
-          $ip = ""
-          for ($i=0; $i -lt 20; $i++){
-            $ip = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4)
-            if ($ip) { break }
+          $ip = $null
+          $tries = 0
+          while (-not $ip -and $tries -lt 20) {
+            $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
             Start-Sleep -Seconds 3
+            $tries++
           }
+
+          if (-not $ip) { Write-Error "Tailscale IP not available"; exit 1 }
 
           echo "TS_IP=$ip" >> $env:GITHUB_ENV
 
-      # -------------------------
-      # 5) Verify RDP works
-      # -------------------------
-      - name: Verify RDP Port
+      - name: Verify RDP accessibility via Tailscale
         shell: pwsh
         run: |
-          $test = Test-NetConnection -ComputerName $env:TS_IP -Port 3389
-          if (-not $test.TcpTestSucceeded) { Write-Error "RDP Port Blocked!" }
+          $ok = Test-NetConnection -ComputerName $env:TS_IP -Port 3389
+          if (-not $ok.TcpTestSucceeded) { Write-Error "RDP port not reachable via Tailscale"; exit 1 }
+          Write-Host "RDP reachable at $env:TS_IP"
 
-      # -------------------------
-      # 6) Set Wallpaper (auto detect image)
-      # -------------------------
-      - name: Set Wallpaper
+      - name: Acquire wallpaper (repo priority, else download from URL, else find any image)
         shell: pwsh
         run: |
-          $wall = Get-ChildItem -Recurse -Include *.jpg, *.png -Path "$env:GITHUB_WORKSPACE" | Select-Object -First 1
-          if (-not $wall) { Write-Host "No Wallpaper Found"; exit 0 }
+          # Priority A: .github/images/wallpaper.jpg
+          $repoPath = Join-Path $env:GITHUB_WORKSPACE ".github/images/wallpaper.jpg"
+          $selected = $null
 
-          Copy-Item $wall.FullName "C:\Users\Public\wall.jpg" -Force
-          Set-ItemProperty -Path "HKCU:\Control Panel\Desktop\" -Name wallpaper -Value "C:\Users\Public\wall.jpg"
-          rundll32.exe user32.dll, UpdatePerUserSystemParameters
+          if (Test-Path $repoPath) {
+            $selected = Get-Item $repoPath
+          } else {
+            # Priority B: WALLPAPER_URL env/secret
+            if ($env:WALLPAPER_URL) {
+              $dl = "$env:TEMP\wallpaper_download"
+              Invoke-WebRequest -Uri $env:WALLPAPER_URL -OutFile $dl -UseBasicParsing -ErrorAction SilentlyContinue
+              if (Test-Path $dl) { $selected = Get-Item $dl }
+            }
+          }
 
-      # -------------------------
-      # 7) Keep Alive + Banner
-      # -------------------------
-      - name: Keep Runner Alive (GreenboyMC Cloud PC)
+          # Priority C: any image in repo (fallback)
+          if (-not $selected) {
+            $any = Get-ChildItem -Path $env:GITHUB_WORKSPACE -Recurse -Include *.jpg,*.jpeg,*.png -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($any) { $selected = $any }
+          }
+
+          if (-not $selected) {
+            Write-Host "No wallpaper found (repo or URL). Skipping wallpaper step."
+            exit 0
+          }
+
+          Write-Host "Using wallpaper: $($selected.FullName)"
+
+          # Copy into RDP user's Pictures folder
+          $rdpPics = "C:\Users\RDP\Pictures"
+          if (-not (Test-Path $rdpPics)) { New-Item -Path $rdpPics -ItemType Directory -Force | Out-Null }
+          $dst = Join-Path $rdpPics "greenboymc_wallpaper.jpg"
+          Copy-Item -Path $selected.FullName -Destination $dst -Force
+
+          # Update RDP user's registry (HKEY_USERS\<SID>\Control Panel\Desktop)
+          $user = Get-LocalUser -Name "RDP"
+          if (-not $user) { Write-Error "RDP user not found"; exit 1 }
+          $sid = $user.SID.Value
+          $regKey = "Registry::HKEY_USERS\$sid\Control Panel\Desktop"
+
+          if (-not (Test-Path $regKey)) {
+            # create keys if missing (user may not have logged in)
+            New-Item -Path "Registry::HKEY_USERS\$sid" -Name "Control Panel" -Force -ErrorAction SilentlyContinue | Out-Null
+            New-Item -Path $regKey -Force | Out-Null
+          }
+
+          # Set both common names to be safe
+          Set-ItemProperty -Path $regKey -Name "WallPaper" -Value $dst -Force
+          Set-ItemProperty -Path $regKey -Name "Wallpaper" -Value $dst -Force
+          Set-ItemProperty -Path $regKey -Name "WallpaperStyle" -Value "10" -Force   # 10 = Fill
+          Set-ItemProperty -Path $regKey -Name "TileWallpaper" -Value "0" -Force
+
+          # Also copy public fallback (applies to current sessions)
+          Copy-Item -Path $selected.FullName -Destination "C:\Users\Public\wallpaper_greenboymc.jpg" -Force
+          reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v Wallpaper /t REG_SZ /d "C:\Users\Public\wallpaper_greenboymc.jpg" /f | Out-Null
+
+          Write-Host "Wallpaper installed to $dst and registry updated for RDP user (SID=$sid)."
+
+      - name: Show banner and keep runner alive
         shell: pwsh
         run: |
           Write-Host ""
-          Write-Host "═══════════════════════════════════════════════════════"
-          Write-Host "   🌐  GREENBOYMC CLOUD PC — SESSION STARTED  🌐"
-          Write-Host "═══════════════════════════════════════════════════════"
+          Write-Host "╔════════════════════════════════════════════════════╗"
+          Write-Host "║            🌐  GREENBOYMC CLOUD PC  🌐            ║"
+          Write-Host "║        High-Performance • Global • Secure         ║"
+          Write-Host "╚════════════════════════════════════════════════════╝"
           Write-Host ""
-          Write-Host "  🔹 IP: $env:TS_IP"
-          Write-Host "  🔹 USER: $env:RDP_USER"
-          Write-Host "  🔹 PASS: $env:RDP_PASS"
-          Write-Host ""
-          Write-Host "  ⚡ Enjoy your Cloud PC!"
+          Write-Host "=== RDP LOGIN INFO ==="
+          Write-Host "🌍 TS_IP: $env:TS_IP"
+          Write-Host "👤 USER: $env:RDP_USER"
+          Write-Host "🔐 PASS: $env:RDP_PASS"
+          Write-Host "========================="
           Write-Host ""
           while ($true) {
-            Write-Host "[+] Running... $(Get-Date)"
+            Write-Host "[$(Get-Date)] GreenboyMC Cloud PC running..."
             Start-Sleep -Seconds 300
           }
