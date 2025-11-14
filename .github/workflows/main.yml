@@ -6,23 +6,25 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 3600
+    timeout-minutes: 360
 
     steps:
+      - name: Checkout repo (to get wallpaper)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: Configure Core RDP Settings
         run: |
-          # Enable Remote Desktop and disable Network Level Authentication (if needed)
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
                              -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
                              -Name "UserAuthentication" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
                              -Name "SecurityLayer" -Value 0 -Force
-
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          netsh advfirewall firewall delete rule name="RDP-Tailscale" || Write-Host "no existing rule"
           netsh advfirewall firewall add rule name="RDP-Tailscale" `
             dir=in action=allow protocol=TCP localport=3389
-
           Restart-Service -Name TermService -Force
 
       - name: Create RDP User with Secure Password
@@ -32,29 +34,30 @@ jobs:
               Upper   = [char[]](65..90)
               Lower   = [char[]](97..122)
               Number  = [char[]](48..57)
-              Special = ([char[]](33..47) + [char[]](58..64) +
-                         [char[]](91..96) + [char[]](123..126))
+              Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126))
           }
-
           $rawPassword = @()
           $rawPassword += $charSet.Upper | Get-Random -Count 4
           $rawPassword += $charSet.Lower | Get-Random -Count 4
           $rawPassword += $charSet.Number | Get-Random -Count 4
           $rawPassword += $charSet.Special | Get-Random -Count 4
           $password = -join ($rawPassword | Sort-Object { Get-Random })
-
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-
+          if (-not (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
+            New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+            Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+            Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          } else {
+            # Update password if exists
+            $u = Get-LocalUser -Name "RDP"
+            $u | Set-LocalUser -Password $securePass
+          }
           echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
 
       - name: Install Tailscale
         run: |
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
           $installerPath = "$env:TEMP\tailscale.msi"
-          
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
@@ -62,29 +65,54 @@ jobs:
       - name: Establish Tailscale Connection
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
-
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              Start-Sleep -Seconds 5
-              $retries++
+          $tsIP = $null; $retries = 0
+          while (-not $tsIP -and $retries -lt 12) {
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+            Start-Sleep -Seconds 5
+            $retries++
           }
-
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned."
-              exit 1
-          }
-
+          if (-not $tsIP) { Write-Error "Tailscale IP not assigned."; exit 1 }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
       - name: Verify RDP Accessibility
         run: |
           $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection failed"
-              exit 1
+          if (-not $testResult.TcpTestSucceeded) { Write-Error "TCP connection failed"; exit 1 }
+
+      - name: Install wallpaper into RDP user profile and set registry
+        run: |
+          # Adjust these if you placed the image in a different repo path
+          $repoImg = Join-Path $GITHUB_WORKSPACE ".github\images\greenboymc-wallpaper.jpg"
+          if (-not (Test-Path $repoImg)) {
+            Write-Error "Wallpaper not found at $repoImg. Place file at .github/images/greenboymc-wallpaper.jpg in this repo."
+            exit 1
           }
+
+          # Destination in the RDP user's profile
+          $dest = "C:\Users\RDP\Pictures"
+          if (-not (Test-Path $dest)) { New-Item -Path $dest -ItemType Directory -Force | Out-Null }
+          $destFile = Join-Path $dest "greenboymc-wallpaper.jpg"
+          Copy-Item -Path $repoImg -Destination $destFile -Force
+
+          # Get the RDP user's SID
+          $user = Get-LocalUser -Name "RDP"
+          if (-not $user) { Write-Error "User RDP not found"; exit 1 }
+          $sid = $user.SID.Value
+
+          # Create registry keys under HKEY_USERS\<SID>\Control Panel\Desktop
+          $regPath = "Registry::HKEY_USERS\$sid\Control Panel\Desktop"
+          if (-not (Test-Path $regPath)) {
+            # ensure the key exists (if user never logged in, key might not exist; create it)
+            New-Item -Path "Registry::HKEY_USERS\$sid" -Name "Control Panel" -Force -ErrorAction SilentlyContinue | Out-Null
+            New-Item -Path $regPath -Force | Out-Null
+          }
+
+          # Set wallpaper values (WallpaperStyle: 10 = Fill, TileWallpaper:0)
+          Set-ItemProperty -Path $regPath -Name "WallPaper" -Value $destFile -Force
+          Set-ItemProperty -Path $regPath -Name "WallpaperStyle" -Value "10" -Force
+          Set-ItemProperty -Path $regPath -Name "TileWallpaper" -Value "0" -Force
+
+          Write-Host "Wallpaper copied to $destFile and registry updated for SID $sid."
 
       - name: Maintain Connection (GreenboyMC Banner)
         run: |
