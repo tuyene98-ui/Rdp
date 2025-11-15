@@ -1,31 +1,49 @@
-name: Cloud PC
+name: GreenboyMC-RDP
 
-on: workflow_dispatch
+on:
+  workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  rdp-pro:
+    runs-on: windows-latest
+    timeout-minutes: 3600
 
     steps:
-      - name: Update system
-        run: sudo apt update -y && sudo apt upgrade -y
+      - name: Checkout Repo
+        uses: actions/checkout@v4
 
-      - name: Install XRDP + Desktop
+      - name: Enable RDP
         run: |
-          sudo apt install xfce4 xfce4-goodies xrdp -y
-          sudo systemctl enable xrdp
-          sudo systemctl start xrdp
-          sudo adduser pcuser --gecos "" --disabled-password
-          echo "pcuser:123456" | sudo chpasswd
-          sudo usermod -aG sudo pcuser
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service TermService
 
-      - name: Allow RDP port
-        run: sudo ufw allow 3389
-
-      - name: Show connection info
+      - name: Create RDP User
         run: |
-          echo "=============================="
-          echo "RDP USER: pcuser"
-          echo "PASSWORD: 123456"
-          echo "IP: $(curl -s ifconfig.me)"
-          echo "=============================="
+          \$pass = -join ((33..126) | Get-Random -Count 16 | ForEach-Object {[char]\$_})
+          \$sp = ConvertTo-SecureString \$pass -AsPlainText -Force
+          New-LocalUser -Name "RDP" -Password \$sp -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          echo "RDP_PASS=\$pass" >> \$env:GITHUB_ENV
+
+      - name: Install Tailscale
+        run: |
+          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi" -OutFile "\$env:TEMP/ts.msi"
+          Start-Process msiexec.exe -ArgumentList "/i `"\$env:TEMP/ts.msi`" /quiet /norestart" -Wait
+
+      - name: Connect Tailscale
+        run: |
+          & "\$env:ProgramFiles/Tailscale/tailscale.exe" up --authkey=\${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=ProPC-\$env:GITHUB_RUN_ID
+          \$ip = & "\$env:ProgramFiles/Tailscale/tailscale.exe" ip -4
+          echo "TAILSCALE_IP=\$ip" >> \$env:GITHUB_ENV
+
+      - name: Start 60h Cloud PC
+        run: |
+          Write-Host "===================================="
+          Write-Host "    GREENBOYMC WINDOWS PRO CLOUD     "
+          Write-Host "===================================="
+          Write-Host "IP: \$env:TAILSCALE_IP"
+          Write-Host "User: RDP"
+          Write-Host "Pass: \$env:RDP_PASS"
+          Write-Host "===================================="
+          while (\$true) { Start-Sleep -Seconds 300 }
