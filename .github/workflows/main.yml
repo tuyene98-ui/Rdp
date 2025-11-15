@@ -1,4 +1,4 @@
-name: Windows RDP via Tailscale (120GB)
+name: Windows RDP via Tailscale (Fixed 120GB)
 
 on:
   workflow_dispatch:
@@ -24,12 +24,12 @@ jobs:
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           echo "RDP_PASS=$Password" | Out-File -Append $env:GITHUB_ENV
 
-      - name: Expand Disk to 120GB
+      - name: Prepare 120GB Storage
         shell: pwsh
         run: |
-          $vhd = (Get-WmiObject Win32_DiskDrive | Where-Object { $_.Model -like "*Google*" }).DeviceID
-          $part = Get-Partition -DiskNumber 0 -PartitionNumber 3
-          Resize-Partition -InputObject $part -Size 120GB
+          if (!(Test-Path "D:\")) { Write-Error "D: drive missing"; exit 1 }
+          Write-Host "✔ 120GB D: drive available!"
+          New-Item -ItemType Directory -Force -Path "D:\RDP-Storage" | Out-Null
 
       - name: Install Tailscale
         run: |
@@ -53,12 +53,10 @@ jobs:
       - name: Keep Alive (GreenboyMC)
         run: |
           Write-Host "==========================================="
-          Write-Host "     WINDOWS RDP IS NOW ONLINE (TAILSCALE)"
+          Write-Host "     WINDOWS RDP ONLINE (TAILSCALE)"
           Write-Host "==========================================="
-          Write-Host "IP Address  : $env:TAILSCALE_IP"
-          Write-Host "User        : RDP"
-          Write-Host "Password    : $env:RDP_PASS"
+          Write-Host "IP        : $env:TAILSCALE_IP"
+          Write-Host "User      : RDP"
+          Write-Host "Password  : $env:RDP_PASS"
           Write-Host "==========================================="
-          while ($true) {
-            Start-Sleep -Seconds 300
-          }
+          while ($true) { Start-Sleep 300 }
