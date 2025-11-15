@@ -6,7 +6,7 @@ on:
 jobs:
   run:
     runs-on: windows-latest
-    timeout-minutes: 480   # 8 tiếng
+    timeout-minutes: 480
 
     steps:
       - name: Enable RDP
@@ -16,8 +16,15 @@ jobs:
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 0
 
-      - name: Info
+      - name: Show RDP Info (BIG)
         run: |
-          echo "USERNAME: runneradmin"
-          echo "PASSWORD: 123123Aa@"
-          ipconfig
+          echo "========================="
+          echo "  R D P    I N F O"
+          echo "========================="
+          echo "USERNAME : runneradmin"
+          echo "PASSWORD : 123123Aa@"
+          echo -------------------------
+          echo "PUBLIC IP:"
+          (Invoke-WebRequest -UseBasicParsing "https://api.ipify.org").Content
+          echo -------------------------
+          echo "COPY IP ABOVE TO RDP"
