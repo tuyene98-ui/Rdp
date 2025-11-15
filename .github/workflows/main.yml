@@ -6,7 +6,7 @@ on:
 jobs:
   run-pc:
     runs-on: windows-latest
-    timeout-minutes: 480  # 8 giờ
+    timeout-minutes: 480
 
     steps:
       - name: Enable RDP
@@ -22,17 +22,19 @@ jobs:
       - name: Install Cloudflared
         run: |
           Invoke-WebRequest https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -OutFile cloudflared.exe
-          ./cloudflared.exe service install
 
       - name: Start Tunnel (Expose RDP)
-        run: |
-          ./cloudflared.exe tunnel --url rdp://localhost:3389 > tunnel.log 2>&1 &
         shell: powershell
+        run: |
+          Start-Process -FilePath "./cloudflared.exe" `
+            -ArgumentList "tunnel --url rdp://localhost:3389" `
+            -RedirectStandardOutput "tunnel.log" `
+            -RedirectStandardError "tunnel.log"
 
       - name: Get Tunnel URL
         shell: powershell
         run: |
-          Start-Sleep -Seconds 10
+          Start-Sleep -Seconds 8
           $log = Get-Content "tunnel.log" | Out-String
           $url = ($log | Select-String "https://.*trycloudflare.com").Matches.Value
           Write-Output "URL: $url"
