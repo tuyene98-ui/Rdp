@@ -1,52 +1,31 @@
-name: GREENBOYM Cloud PC
+name: Cloud PC
 
-on:
-  workflow_dispatch:
+on: workflow_dispatch
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
-      - name: Start Ubuntu
+      - name: Update system
+        run: sudo apt update -y && sudo apt upgrade -y
+
+      - name: Install XRDP + Desktop
         run: |
-          sudo apt update
-          sudo apt install -y xrdp xfce4 xfce4-goodies
+          sudo apt install xfce4 xfce4-goodies xrdp -y
           sudo systemctl enable xrdp
           sudo systemctl start xrdp
-
-      - name: Create user pcuser (fix password bug)
-        run: |
-          sudo userdel -r pcuser 2>/dev/null || true
-          sudo useradd -m -s /bin/bash pcuser
-          echo "pcuser:123456" | sudo chpasswd --crypt-method=SHA512
+          sudo adduser pcuser --gecos "" --disabled-password
+          echo "pcuser:123456" | sudo chpasswd
           sudo usermod -aG sudo pcuser
 
-      - name: Expand disk to full size (125GB)
-        run: |
-          sudo growpart /dev/sda 1 || true
-          sudo resize2fs /dev/sda1 || true
-
-      - name: Allow RDP port 3389
-        run: |
-          sudo ufw allow 3389 || true
-          sudo ufw disable || true
-
-      - name: Install desktop & browser
-        run: |
-          sudo apt install -y firefox vlc gnome-terminal
+      - name: Allow RDP port
+        run: sudo ufw allow 3389
 
       - name: Show connection info
         run: |
-          echo "======================================="
-          echo " 📌 *GREENBOYM* CLOUD PC READY!"
-          echo " 🔌 RDP USER : pcuser"
-          echo " 🔑 PASSWORD : 123456"
-          echo "======================================="
-
-      - name: Keep alive for 6 hours
-        run: |
-          echo "PC ONLINE FOR 6 HOURS..."
-          sleep 21600
+          echo "=============================="
+          echo "RDP USER: pcuser"
+          echo "PASSWORD: 123456"
+          echo "IP: $(curl -s ifconfig.me)"
+          echo "=============================="
