@@ -1,52 +1,52 @@
-name: Linux-PC-RDP
+name: GREENBOYM Cloud PC
 
 on:
   workflow_dispatch:
 
 jobs:
-  rdp:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    permissions:
+      contents: write
 
     steps:
-    - name: Update system
-      run: |
-        sudo apt update -y
-        sudo apt install xfce4 xfce4-goodies xrdp -y
-        sudo systemctl enable xrdp
-        sudo systemctl start xrdp
+      - name: Start Ubuntu
+        run: |
+          sudo apt update
+          sudo apt install -y xrdp xfce4 xfce4-goodies
+          sudo systemctl enable xrdp
+          sudo systemctl start xrdp
 
-    - name: Set RDP password
-      run: |
-        echo "pcuser:123456" | sudo chpasswd
-        sudo adduser pcuser sudo
+      - name: Create user pcuser (fix password bug)
+        run: |
+          sudo userdel -r pcuser 2>/dev/null || true
+          sudo useradd -m -s /bin/bash pcuser
+          echo "pcuser:123456" | sudo chpasswd --crypt-method=SHA512
+          sudo usermod -aG sudo pcuser
 
-    - name: Expand disk to max (≈125GB)
-      run: |
-        sudo growpart /dev/sda 1
-        sudo resize2fs /dev/sda1
+      - name: Expand disk to full size (125GB)
+        run: |
+          sudo growpart /dev/sda 1 || true
+          sudo resize2fs /dev/sda1 || true
 
-    - name: Allow RDP port 3389
-      run: |
-        sudo ufw allow 3389/tcp || true
+      - name: Allow RDP port 3389
+        run: |
+          sudo ufw allow 3389 || true
+          sudo ufw disable || true
 
-    - name: Show connection info
-      run: |
-        echo "================================="
-        echo "     🎉 LINUX RDP READY 🎉"
-        echo "================================="
-        echo "IP PUBLIC:"
-        curl -s ifconfig.me
-        echo ""
-        echo "USERNAME: pcuser"
-        echo "PASSWORD: 123456"
-        echo "================================="
-        echo ""
-        echo "⏳ PC sẽ chạy trong 6 giờ..."
+      - name: Install desktop & browser
+        run: |
+          sudo apt install -y firefox vlc gnome-terminal
 
-    - name: Keep alive
-      run: |
-        while true; do
-          echo "RUNNING $(date)"
-          sleep 300
-        done
+      - name: Show connection info
+        run: |
+          echo "======================================="
+          echo " 📌 *GREENBOYM* CLOUD PC READY!"
+          echo " 🔌 RDP USER : pcuser"
+          echo " 🔑 PASSWORD : 123456"
+          echo "======================================="
+
+      - name: Keep alive for 6 hours
+        run: |
+          echo "PC ONLINE FOR 6 HOURS..."
+          sleep 21600
