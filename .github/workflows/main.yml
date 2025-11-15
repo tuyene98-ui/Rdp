@@ -1,70 +1,56 @@
-name: Windows-RDP-Full-8H
+name: Windows RDP 8H
 
 on:
   workflow_dispatch:
 
 jobs:
-  build:
-    name: RDP Online 8 Hours
+  windows:
     runs-on: windows-latest
-    timeout-minutes: 480   # 8 hours
+    timeout-minutes: 480   # 8 giờ
 
     steps:
-    - name: Step 1 — Enable Remote Desktop
-      run: |
-        Write-Host "========== ENABLE RDP =========="
-        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" `
-          -Name "fDenyTSConnections" -Value 0
+      - name: Starting Windows RDP...
+        run: echo "Booting Windows..."
 
-        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-        Write-Host "RDP Enabled Successfully"
+      - name: Enable RDP
+        shell: powershell
+        run: |
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-        Write-Host "Setting Password..."
-        net user runneradmin Runner@123
-        Write-Host "Password Updated: Runner@123"
+      - name: Create Random User
+        shell: powershell
+        run: |
+          $user = "pc" + (Get-Random -Maximum 9999)
+          $pass = -join ((33..126) | Get-Random -Count 14 | % {[char]$_})
+          net user $user $pass /add
+          net localgroup administrators $user /add
+          echo "USER=$user" >> $env:GITHUB_ENV
+          echo "PASS=$pass" >> $env:GITHUB_ENV
 
-    - name: Step 2 — Install Chocolatey & Software
-      run: |
-        Write-Host "========== INSTALL SOFTWARE =========="
-        Set-ExecutionPolicy Bypass -Scope Process -Force
-        Invoke-WebRequest https://community.chocolatey.org/install.ps1 -UseBasicParsing | Invoke-Expression
+      - name: Get Public IP
+        shell: powershell
+        run: |
+          $ip = (Invoke-WebRequest -Uri "https://ifconfig.me/ip").Content.Trim()
+          echo "PUBLIC_IP=$ip" >> $env:GITHUB_ENV
 
-        choco install googlechrome -y
-        choco install 7zip -y
-        choco install vscode -y
-        choco install nodejs -y
+      - name: Show Login Info
+        shell: powershell
+        run: |
+          Write-Host ""
+          Write-Host "============================="
+          Write-Host "        ✔ RDP READY"
+          Write-Host "============================="
+          Write-Host "IP: $env:PUBLIC_IP"
+          Write-Host "User: $env:USER"
+          Write-Host "Pass: $env:PASS"
+          Write-Host "============================="
+          Write-Host "Copy login vào Windows RDP client."
+          Write-Host ""
 
-        Write-Host "Software Installed Successfully"
-
-    - name: Step 3 — Set Wallpaper
-      run: |
-        Write-Host "========== SET WALLPAPER =========="
-        $wall = "$env:TEMP\wallpaper.jpg"
-        Invoke-WebRequest -Uri "https://i.imgur.com/0Z7GH9M.jpeg" -OutFile $wall
-
-        reg add "HKCU\Control Panel\Desktop" /v Wallpaper /t REG_SZ /d $wall /f
-        RUNDLL32.EXE user32.dll,UpdatePerUserSystemParameters
-
-        Write-Host "Wallpaper Applied"
-
-    - name: Step 4 — Display RDP Login Info
-      run: |
-        $ip = (Invoke-WebRequest -Uri "https://api.ipify.org").Content
-
-        Write-Host ""
-        Write-Host "======================================="
-        Write-Host "             🔐 RDP LOGIN INFO         "
-        Write-Host "======================================="
-        Write-Host "Public IP     : $ip"
-        Write-Host "Username      : runneradmin"
-        Write-Host "Password      : Runner@123"
-        Write-Host "Session Time  : 8 Hours"
-        Write-Host "======================================="
-        Write-Host ""
-
-    - name: Step 5 — Keep Session Alive (8 Hours)
-      run: |
-        Write-Host "========== KEEP ALIVE =========="
-        Write-Host "RDP session will stay alive for 8 hours..."
-        Start-Sleep -Seconds 28800
-        Write-Host "Session Ended After 8 Hours"
+      - name: Keep Alive 8 Hours
+        shell: powershell
+        run: |
+          for ($i = 1; $i -le 480; $i++) {
+            Start-Sleep -Seconds 60
+          }
