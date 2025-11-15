@@ -1,12 +1,12 @@
-name: Windows RDP 8 Hours
+name: Windows Runner 8h
 
 on:
   workflow_dispatch:
 
 jobs:
-  windows:
+  run-pc:
     runs-on: windows-latest
-    timeout-minutes: 480  # 8 hours
+    timeout-minutes: 480  # 8 giờ
 
     steps:
       - name: Enable RDP
@@ -16,44 +16,31 @@ jobs:
 
       - name: Create RDP User
         run: |
-          $user = "runneruser"
-          $pass = "Aa123456!"
-          net user $user $pass /add
-          net localgroup administrators $user /add
-          echo "USERNAME=$user" >> $env:GITHUB_ENV
-          echo "PASSWORD=$pass" >> $env:GITHUB_ENV
+          net user runner Pass1234! /add
+          net localgroup administrators runner /add
 
-      - name: Install Cloudflare Tunnel
+      - name: Install Cloudflared
         run: |
           Invoke-WebRequest https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -OutFile cloudflared.exe
+          ./cloudflared.exe service install
 
       - name: Start Tunnel (Expose RDP)
         run: |
-          Start-Process -FilePath ".\cloudflared.exe" -ArgumentList "tunnel --url rdp://localhost:3389" -WindowStyle Hidden
-          Start-Sleep -Seconds 8
+          ./cloudflared.exe tunnel --url rdp://localhost:3389 > tunnel.log 2>&1 &
+        shell: powershell
 
       - name: Get Tunnel URL
-        shell: pwsh
+        shell: powershell
         run: |
-          $log = Get-Content "$env:USERPROFILE\.cloudflared\*.log" -Raw
-          $url = ($log -split "`n" | Select-String "trycloudflare.com" | Select-Object -First 1).ToString()
-          $url = $url -replace ".*https", "https"
-          echo "Tunnel URL: $url"
-          echo "TUNNEL_URL=$url" >> $env:GITHUB_ENV
-
-      - name: Show Login Info
-        run: |
-          Write-Host "==============================="
-          Write-Host "       Windows RDP READY"
-          Write-Host "==============================="
-          Write-Host "Host: $env:TUNNEL_URL"
-          Write-Host "User: $env:USERNAME"
-          Write-Host "Pass: $env:PASSWORD"
-          Write-Host "==============================="
+          Start-Sleep -Seconds 10
+          $log = Get-Content "tunnel.log" | Out-String
+          $url = ($log | Select-String "https://.*trycloudflare.com").Matches.Value
+          Write-Output "URL: $url"
 
       - name: Keep Alive 8 Hours
+        shell: powershell
         run: |
-          for ($i=1; $i -le 480; $i++) {
-            Write-Output "Alive for $i minutes"
+          for ($i = 1; $i -le 480; $i++) {
+            Write-Output "Running minute $i / 480"
             Start-Sleep -Seconds 60
           }
