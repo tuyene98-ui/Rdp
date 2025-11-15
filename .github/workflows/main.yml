@@ -6,78 +6,98 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 3600
 
     steps:
     - name: Start
       run: echo "Starting job..."
 
-    # ENABLE RDP
+    # ENABLE RDP (no restart)
     - name: Enable RDP
       run: |
         Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
         Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-    # CREATE RANDOM USER + PASS (fix lỗi)
+    # CREATE RANDOM USER + PASS (Windows-compatible password length <=14)
     - name: Create RDP User
+      shell: pwsh
       run: |
-        # Username random (8 ký tự)
+        # Username random (rdpXXXXX)
         $user = "rdp" + (-join ((97..122) | Get-Random -Count 5 | % {[char]$_}))
 
-        # Password random 12 ký tự (Windows compatible)
-        $pass = -join ((33..126) | Get-Random -Count 12 | % {[char]$_})
+        # Password random 12 ký tự (compatible with net user)
+        $chars = (33..126) | ForEach-Object {[char]$_}
+        $pass = -join (Get-Random -InputObject $chars -Count 12)
 
-        net user $user $pass /add /y
+        net user $user $pass /add
         net localgroup administrators $user /add
 
+        Write-Host "Created user: $user"
         echo "RDP_USER=$user" >> $env:GITHUB_ENV
         echo "RDP_PASS=$pass" >> $env:GITHUB_ENV
 
     # INSTALL TAILSCALE
     - name: Install Tailscale
+      shell: pwsh
       run: |
-        Invoke-WebRequest https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe -OutFile ts.exe
-        Start-Process ts.exe -ArgumentList "/quiet" -Wait
+        $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe"
+        $out = "$env:TEMP\ts.exe"
+        Invoke-WebRequest -Uri $url -OutFile $out
+        Start-Process $out -ArgumentList "/quiet" -Wait
 
-    # LOGIN TAILSCALE
+    # LOGIN TAILSCALE (uses repo secret TAILSCALE_AUTH_KEY)
     - name: Login Tailscale
+      shell: pwsh
       env:
         TS_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
       run: |
-        & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey $env:TS_KEY --hostname winpc-${{ github.run_id }}
-        Start-Sleep -Seconds 5
-        $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+        if (-not $env:TS_KEY) {
+          Write-Error "Missing TAILSCALE_AUTH_KEY secret. Please add it to the repo settings."
+          exit 1
+        }
+        & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey $env:TS_KEY --hostname github-winpc-${{ github.run_id }} || exit 1
+
+        # wait for IP
+        $ip = ""
+        for ($i=0; $i -lt 20 -and -not $ip; $i++) {
+          Start-Sleep -Seconds 3
+          $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+        }
+        if (-not $ip) { Write-Warning "Tailscale IP not found"; $ip = "no-ip" }
         echo "TS_IP=$ip" >> $env:GITHUB_ENV
 
-    # INSTALL SOFTWARE
-    - name: Install Chocolatey
+    # OPTIONAL: install choco + useful software
+    - name: Install Chocolatey & Software
+      shell: pwsh
       run: |
         Set-ExecutionPolicy Bypass -Scope Process -Force
         iex ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
+        choco install -y googlechrome firefox 7zip
 
-    - name: Install Software
-      run: |
-        choco install -y googlechrome
-        choco install -y firefox
-        choco install -y 7zip
-
-    # WALLPAPER
+    # SET WALLPAPER (optional)
     - name: Set Wallpaper
+      shell: pwsh
       run: |
         $path = "$env:TEMP\wall.jpg"
         Invoke-WebRequest -Uri "https://wallpaperaccess.com/full/317501.jpg" -OutFile $path
         reg add "HKCU\Control Panel\Desktop" /v Wallpaper /t REG_SZ /d $path /f
         RUNDLL32.EXE user32.dll,UpdatePerUserSystemParameters
 
-    # SHOW LOGIN INFO
-    - name: Login Info
+    # SHOW LOGIN + TAILSCALE INFO
+    - name: Login Info (output)
+      shell: pwsh
       run: |
         Write-Host "====================================="
-        Write-Host "      🔐 RDP LOGIN INFO"
+        Write-Host "           🔐 RDP LOGIN INFO"
         Write-Host "====================================="
         Write-Host "Tailscale IP : $env:TS_IP"
         Write-Host "User         : $env:RDP_USER"
-        Write-Host "Pass         : $env:RDP_PASS"
+        Write-Host "Password     : $env:RDP_PASS"
         Write-Host "====================================="
+        # print tailscale status for debugging
+        & "$env:ProgramFiles\Tailscale\tailscale.exe" status || Write-Host "tailscale status failed"
 
-    - name: Done
-      run: echo "RDP READY ✔"
+    - name: Keep Alive (log)
+      shell: pwsh
+      run: |
+        Write-Host "Workflow finished setup. Keep-alive is not required; action will stay active until manually cancelled or timeout."
