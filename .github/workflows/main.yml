@@ -11,22 +11,22 @@ jobs:
     - name: Start
       run: echo "Starting job..."
 
-    # ENABLE RDP (KHÔNG restart service)
+    # ENABLE RDP
     - name: Enable RDP
       run: |
         Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
         Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-    # CREATE RANDOM USER + PASS
+    # CREATE RANDOM USER + PASS (fix lỗi)
     - name: Create RDP User
       run: |
-        # Username random
-        $user = "rdp" + -join ((48..57) + (97..122) | Get-Random -Count 4 | % {[char]$_})
+        # Username random (8 ký tự)
+        $user = "rdp" + (-join ((97..122) | Get-Random -Count 5 | % {[char]$_}))
 
-        # Password random 16 ký tự
-        $pass = -join ((33..126) | Get-Random -Count 16 | % {[char]$_})
+        # Password random 12 ký tự (Windows compatible)
+        $pass = -join ((33..126) | Get-Random -Count 12 | % {[char]$_})
 
-        net user $user $pass /add
+        net user $user $pass /add /y
         net localgroup administrators $user /add
 
         echo "RDP_USER=$user" >> $env:GITHUB_ENV
@@ -43,8 +43,7 @@ jobs:
       env:
         TS_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
       run: |
-        & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey $env:TS_KEY --hostname windows-rdp-${{ github.run_id }}
-
+        & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey $env:TS_KEY --hostname winpc-${{ github.run_id }}
         Start-Sleep -Seconds 5
         $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
         echo "TS_IP=$ip" >> $env:GITHUB_ENV
@@ -69,15 +68,15 @@ jobs:
         reg add "HKCU\Control Panel\Desktop" /v Wallpaper /t REG_SZ /d $path /f
         RUNDLL32.EXE user32.dll,UpdatePerUserSystemParameters
 
-    # SHOW LOGIN + TAILSCALE
+    # SHOW LOGIN INFO
     - name: Login Info
       run: |
         Write-Host "====================================="
-        Write-Host "        🔐 RDP LOGIN INFO"
+        Write-Host "      🔐 RDP LOGIN INFO"
         Write-Host "====================================="
         Write-Host "Tailscale IP : $env:TS_IP"
         Write-Host "User         : $env:RDP_USER"
-        Write-Host "Password     : $env:RDP_PASS"
+        Write-Host "Pass         : $env:RDP_PASS"
         Write-Host "====================================="
 
     - name: Done
