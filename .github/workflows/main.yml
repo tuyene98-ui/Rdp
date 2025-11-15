@@ -6,17 +6,19 @@ on:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 480   # 8 hours
+    timeout-minutes: 480  # 8 hours
 
     steps:
-      - name: Start Windows RDP
+      - name: Enable RDP
         shell: powershell
         run: |
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\' -Name "fDenyTSConnections" -Value 0
-          net user runneradmin /add
-          net user runneradmin "Password123!" /passwordchg:no
-          net localgroup administrators runneradmin /add
+
+      - name: Set Password
+        shell: powershell
+        run: |
+          net user runneradmin "Password123!"
 
       - name: Get Public IP
         shell: powershell
@@ -30,9 +32,9 @@ jobs:
           Write-Host "=========================="
           Write-Host "        RDP LOGIN"
           Write-Host "=========================="
-          Write-Host "IP: $env:PUBLIC_IP"
-          Write-Host "User: runneradmin"
-          Write-Host "Pass: Password123!"
+          Write-Host "IP Address: $env:PUBLIC_IP"
+          Write-Host "Username: runneradmin"
+          Write-Host "Password: Password123!"
           Write-Host "=========================="
           Write-Host "Use Microsoft Remote Desktop to connect."
 
