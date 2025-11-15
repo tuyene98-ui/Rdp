@@ -11,12 +11,11 @@ jobs:
     - name: Start
       run: echo "Starting job..."
 
-    # ENABLE RDP
+    # ENABLE RDP (KHÔNG restart service)
     - name: Enable RDP
       run: |
         Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
         Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-        Restart-Service termservice
 
     # CREATE RANDOM USER + PASS
     - name: Create RDP User
@@ -50,7 +49,7 @@ jobs:
         $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
         echo "TS_IP=$ip" >> $env:GITHUB_ENV
 
-    # SOFTWARE
+    # INSTALL SOFTWARE
     - name: Install Chocolatey
       run: |
         Set-ExecutionPolicy Bypass -Scope Process -Force
@@ -74,13 +73,12 @@ jobs:
     - name: Login Info
       run: |
         Write-Host "====================================="
-        Write-Host "           🔐 RDP LOGIN INFO"
+        Write-Host "        🔐 RDP LOGIN INFO"
         Write-Host "====================================="
         Write-Host "Tailscale IP : $env:TS_IP"
         Write-Host "User         : $env:RDP_USER"
         Write-Host "Password     : $env:RDP_PASS"
         Write-Host "====================================="
-        Write-Host "👉 Kết nối RDP bằng IP Tailscale nhé!"
-    
+
     - name: Done
       run: echo "RDP READY ✔"
