@@ -8,52 +8,60 @@ jobs:
     runs-on: windows-latest
 
     steps:
+    - name: Set up job
+      run: echo "Starting job..."
+
+    # --- ENABLE RDP ---
     - name: Enable RDP
       run: |
         Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
         Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
+    # --- CREATE USER AUTO ---
     - name: Create RDP User
       run: |
         $user="vanlong"
-        $pass="VanLong@123"
+        $pass=[System.Web.Security.Membership]::GeneratePassword(15,3)
         net user $user $pass /add
         net localgroup administrators $user /add
 
+        echo "USERNAME=$user" >> $env:GITHUB_ENV
+        echo "PASSWORD=$pass" >> $env:GITHUB_ENV
+
+    # --- INSTALL SOFTWARE ---
     - name: Install Chocolatey
-      shell: powershell
       run: |
         Set-ExecutionPolicy Bypass -Scope Process -Force
-        [System.Net.ServicePointManager]::SecurityProtocol = 'Tls12'
-        Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
+        iex ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
 
     - name: Install Common Software
-      shell: powershell
       run: |
         choco install -y googlechrome
         choco install -y firefox
-        choco install -y vscodium
-        choco install -y nodejs
-        choco install -y python
-        choco install -y git
         choco install -y 7zip
-        choco install -y winrar
-        choco install -y dotnet
-        choco install -y vcredist-all
+        choco install -y vscode
 
+    # --- SET WALLPAPER ---
     - name: Set Wallpaper
-      shell: powershell
       run: |
-        Invoke-WebRequest "https://i.imgur.com/8OZJg4R.jpeg" -OutFile "C:\wall.jpg"
-        reg add "HKCU\Control Panel\Desktop" /v Wallpaper /t REG_SZ /d "C:\wall.jpg" /f
-        rundll32.exe user32.dll, UpdatePerUserSystemParameters
+        $path = "$env:TEMP\wallpaper.jpg"
+        Invoke-WebRequest -Uri "https://wallpaperaccess.com/full/317501.jpg" -OutFile $path
+        reg add "HKCU\Control Panel\Desktop" /v Wallpaper /t REG_SZ /d $path /f
+        RUNDLL32.EXE user32.dll,UpdatePerUserSystemParameters
 
+    # --- SHOW LOGIN INFO ---
     - name: Display Login Info
-      shell: powershell
       run: |
-        Write-Host "==============================="
-        Write-Host "      WINDOWS RDP READY"
-        Write-Host "==============================="
-        Write-Host "User: vanlong"
-        Write-Host "Pass: VanLong@123"
-        Write-Host "RDP IP: (check Actions → Logs)"
+        Write-Host "===================================="
+        Write-Host "        🔐 RDP LOGIN INFO"
+        Write-Host "===================================="
+        Write-Host "Host      : $(hostname -I)"
+        Write-Host "Username  : $env:USERNAME"
+        Write-Host "Username  : $env:USERNAME"
+        Write-Host "Username  : $env:USERNAME"
+        Write-Host "User      : vanlong"
+        Write-Host "Password  : $env:PASSWORD"
+        Write-Host "===================================="
+
+    - name: Complete job
+      run: echo "RDP READY ✔"
