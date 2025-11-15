@@ -1,91 +1,64 @@
-name: Ubuntu-XFCE-RDP-120GB
+name: Windows RDP via Tailscale (120GB)
 
 on:
   workflow_dispatch:
 
 jobs:
-  ubuntu-rdp:
-    runs-on: ubuntu-latest
-    # 360 minutes = 6 hours
-    timeout-minutes: 360
+  win-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Update & install desktop + XRDP
+      - name: Enable RDP
         run: |
-          sudo apt update -y
-          sudo apt install -y xfce4 xfce4-goodies xrdp dbus-x11 policykit-1 net-tools curl
-          sudo systemctl enable xrdp
-          sudo systemctl start xrdp
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+                            -Name "fDenyTSConnections" -Value 0 -Force
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-      - name: Create user pcuser and set password (safe)
+      - name: Create RDP User
+        shell: pwsh
         run: |
-          # create user if missing, set password securely
-          sudo useradd -m -s /bin/bash pcuser || true
-          echo "pcuser:pcpass123" | sudo chpasswd
-          sudo usermod -aG sudo pcuser
-          # make sure home dir perms are OK
-          sudo chmod 700 /home/pcuser
+          $Password = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 14 | % {[char]$_})
+          $Secure = ConvertTo-SecureString $Password -AsPlainText -Force
+          New-LocalUser -Name "RDP" -Password $Secure
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          echo "RDP_PASS=$Password" | Out-File -Append $env:GITHUB_ENV
 
-      - name: Create & mount 120GB loopback disk (sparse)
-        shell: bash
+      - name: Expand Disk to 120GB
+        shell: pwsh
         run: |
-          set -euo pipefail
-          IMG="/tmp/gbmc_disk.img"
-          MNT="/mnt/gbmc_disk"
+          $vhd = (Get-WmiObject Win32_DiskDrive | Where-Object { $_.Model -like "*Google*" }).DeviceID
+          $part = Get-Partition -DiskNumber 0 -PartitionNumber 3
+          Resize-Partition -InputObject $part -Size 120GB
 
-          echo "==> Creating sparse image (120G): $IMG (this may be quick because it's sparse)..."
-          # Use truncate to create a sparse file (doesn't immediately allocate all bytes)
-          sudo truncate -s 120G "$IMG" || { echo "truncate failed — sparse file creation may not be supported on runner"; exit 1; }
-
-          echo "==> Creating ext4 filesystem on image..."
-          sudo mkfs.ext4 -F "$IMG" || { echo "mkfs failed (maybe insufficient privileges or runner does not allow loop files)"; exit 1; }
-
-          echo "==> Creating mount point $MNT"
-          sudo mkdir -p "$MNT"
-          sudo mount -o loop "$IMG" "$MNT" || { echo "mount failed"; exit 1; }
-
-          echo "==> Setting ownership to pcuser"
-          sudo chown pcuser:pcuser "$MNT"
-          # Make it automatic for current session (not permanent after runner ends)
-          sudo chmod 750 "$MNT"
-
-          echo "MOUNT_POINT=$MNT" >> $GITHUB_ENV
-          echo "IMG_PATH=$IMG" >> $GITHUB_ENV
-
-      - name: Verify disk mount and show free space
+      - name: Install Tailscale
         run: |
-          echo "Mounted image info:"
-          mount | grep gbmc_disk || true
-          df -h /mnt/gbmc_disk || true
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $file = "$env:TEMP\ts.msi"
+          Invoke-WebRequest -Uri $url -OutFile $file
+          Start-Process msiexec.exe -ArgumentList "/i `"$file`" /quiet /norestart" -Wait
 
-      - name: Allow RDP port (ufw may be inactive on runner)
+      - name: Connect to Tailscale
         run: |
-          sudo apt install -y ufw || true
-          sudo ufw allow 3389/tcp || true
-          sudo ufw --force enable || true || true
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=GH-RDP-${{ github.run_id }}
 
-      - name: Show connection info (public IP + credentials)
-        run: |
-          echo "=========================================="
-          echo " GREENBOYMC LINUX RDP (XFCE) — 6 HOURS"
-          echo "=========================================="
-          echo "User: pcuser"
-          echo "Password: pcpass123"
-          echo "RDP port: 3389"
-          echo "Public IP (from inside runner): $(curl -s ifconfig.me || echo 'no-public-ip')"
-          echo "Mounted 120GB image: $IMG_PATH -> $(df -h $MOUNT_POINT || echo 'mount info missing')"
-          echo "=========================================="
-          echo "Note: If public IP == no-public-ip, the runner may be behind NAT/blocked inbound; use the printed IP or check runner logs."
-          echo "=========================================="
+          $tsIP = ""
+          for ($i=0; $i -lt 20 -and !$tsIP; $i++) {
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+            Start-Sleep 3
+          }
 
-      - name: Keep runner alive (6h) and tail logs
+          echo "TAILSCALE_IP=$tsIP" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Keep Alive (GreenboyMC)
         run: |
-          echo "Keeping runner alive for up to 6 hours. Press cancel in Actions to stop earlier."
-          # Print a heartbeat every 60s to keep the log active
-          for i in $(seq 1 360); do
-            echo "$(date) - GreenboyMC Linux RDP running (heartbeat $i)"
-            sleep 60
-          done
+          Write-Host "==========================================="
+          Write-Host "     WINDOWS RDP IS NOW ONLINE (TAILSCALE)"
+          Write-Host "==========================================="
+          Write-Host "IP Address  : $env:TAILSCALE_IP"
+          Write-Host "User        : RDP"
+          Write-Host "Password    : $env:RDP_PASS"
+          Write-Host "==========================================="
+          while ($true) {
+            Start-Sleep -Seconds 300
+          }
