@@ -1,46 +1,23 @@
-name: RDP Free 8h
+name: Cloud-PC-8H
 
 on:
   workflow_dispatch:
 
 jobs:
-  build:
+  run:
     runs-on: windows-latest
+    timeout-minutes: 480   # 8 tiếng
+
     steps:
-    - name: Enable RDP
-      run: |
-        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -name "fDenyTSConnections" -Value 0
-        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+      - name: Enable RDP
+        run: |
+          Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString "123123Aa@" -AsPlainText -Force)
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 0
 
-    - name: Create RDP User
-      run: |
-        net user runner Pass1234! /add
-        net localgroup administrators runner /add
-
-    - name: Install Cloudflared
-      run: |
-        Invoke-WebRequest https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -OutFile cloudflared.exe
-
-    - name: Start Tunnel (Expose RDP)
-      run: |
-        Start-Process powershell -WindowStyle Hidden -ArgumentList "Start-Job { ./cloudflared.exe tunnel --url rdp://localhost:3389 }"
-        Start-Sleep -Seconds 5
-
-    - name: Get Tunnel URL
-      run: |
-        Write-Output "==== Searching for Tunnel URL ===="
-        Start-Sleep -Seconds 5
-        $log = Get-ChildItem "$env:LOCALAPPDATA\cloudflared" -Recurse -Filter "*.log" | Select-Object -First 1
-        if ($log) {
-          Write-Output "Found Log: $($log.FullName)"
-          $content = Get-Content $log.FullName
-          $url = ($content | Select-String -Pattern "trycloudflare.com").ToString()
-          Write-Output "`n==== YOUR RDP URL ===="
-          Write-Output $url
-        } else {
-          Write-Output "❌ Không tìm thấy log cloudflared!"
-        }
-
-    - name: Keep Alive 8 Hours
-      run: |
-        ping -n 28800 127.0.0.1 >nul
+      - name: Info
+        run: |
+          echo "USERNAME: runneradmin"
+          echo "PASSWORD: 123123Aa@"
+          ipconfig
