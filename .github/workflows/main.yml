@@ -1,48 +1,46 @@
-name: Windows Runner 8h
+name: RDP Free 8h
 
 on:
   workflow_dispatch:
 
 jobs:
-  run-pc:
+  build:
     runs-on: windows-latest
-    timeout-minutes: 480
-
     steps:
-      - name: Enable RDP
-        run: |
-          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+    - name: Enable RDP
+      run: |
+        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-      - name: Create RDP User
-        run: |
-          net user runner Pass1234! /add
-          net localgroup administrators runner /add
+    - name: Create RDP User
+      run: |
+        net user runner Pass1234! /add
+        net localgroup administrators runner /add
 
-      - name: Install Cloudflared
-        run: |
-          Invoke-WebRequest https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -OutFile cloudflared.exe
+    - name: Install Cloudflared
+      run: |
+        Invoke-WebRequest https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -OutFile cloudflared.exe
 
-      - name: Start Tunnel (Expose RDP)
-        shell: powershell
-        run: |
-          Start-Job -ScriptBlock {
-              & "$PWD\cloudflared.exe" tunnel --url rdp://localhost:3389
-          }
-          Start-Sleep -Seconds 5
+    - name: Start Tunnel (Expose RDP)
+      run: |
+        Start-Process powershell -WindowStyle Hidden -ArgumentList "Start-Job { ./cloudflared.exe tunnel --url rdp://localhost:3389 }"
+        Start-Sleep -Seconds 5
 
-      - name: Get Tunnel URL
-        shell: powershell
-        run: |
-          Get-Content "$env:LOCALAPPDATA\cloudflared\*.log" -ErrorAction SilentlyContinue
-          $logs = Get-Content "$env:LOCALAPPDATA\cloudflared\*.log" -ErrorAction SilentlyContinue | Out-String
-          $url = ($logs | Select-String "https://.*trycloudflare.com").Matches.Value
-          Write-Host "URL: $url"
+    - name: Get Tunnel URL
+      run: |
+        Write-Output "==== Searching for Tunnel URL ===="
+        Start-Sleep -Seconds 5
+        $log = Get-ChildItem "$env:LOCALAPPDATA\cloudflared" -Recurse -Filter "*.log" | Select-Object -First 1
+        if ($log) {
+          Write-Output "Found Log: $($log.FullName)"
+          $content = Get-Content $log.FullName
+          $url = ($content | Select-String -Pattern "trycloudflare.com").ToString()
+          Write-Output "`n==== YOUR RDP URL ===="
+          Write-Output $url
+        } else {
+          Write-Output "❌ Không tìm thấy log cloudflared!"
+        }
 
-      - name: Keep Alive 8 Hours
-        shell: powershell
-        run: |
-          for ($i = 1; $i -le 480; $i++) {
-            Write-Host "Running minute $i / 480"
-            Start-Sleep -Seconds 60
-          }
+    - name: Keep Alive 8 Hours
+      run: |
+        ping -n 28800 127.0.0.1 >nul
