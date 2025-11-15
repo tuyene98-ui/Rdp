@@ -1,4 +1,4 @@
-name: Windows RDP 8H
+name: Windows RDP 8 Hours
 
 on:
   workflow_dispatch:
@@ -6,51 +6,40 @@ on:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 480   # 8 giờ
+    timeout-minutes: 480   # 8 hours
 
     steps:
-      - name: Starting Windows RDP...
-        run: echo "Booting Windows..."
-
-      - name: Enable RDP
+      - name: Start Windows RDP
         shell: powershell
         run: |
-          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-
-      - name: Create Random User
-        shell: powershell
-        run: |
-          $user = "pc" + (Get-Random -Maximum 9999)
-          $pass = -join ((33..126) | Get-Random -Count 14 | % {[char]$_})
-          net user $user $pass /add
-          net localgroup administrators $user /add
-          echo "USER=$user" >> $env:GITHUB_ENV
-          echo "PASS=$pass" >> $env:GITHUB_ENV
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\' -Name "fDenyTSConnections" -Value 0
+          net user runneradmin /add
+          net user runneradmin "Password123!" /passwordchg:no
+          net localgroup administrators runneradmin /add
 
       - name: Get Public IP
         shell: powershell
         run: |
-          $ip = (Invoke-WebRequest -Uri "https://ifconfig.me/ip").Content.Trim()
+          $ip = (Invoke-WebRequest -UseBasicParsing "https://api.ipify.org").Content
           echo "PUBLIC_IP=$ip" >> $env:GITHUB_ENV
 
       - name: Show Login Info
         shell: powershell
         run: |
-          Write-Host ""
-          Write-Host "============================="
-          Write-Host "        ✔ RDP READY"
-          Write-Host "============================="
+          Write-Host "=========================="
+          Write-Host "        RDP LOGIN"
+          Write-Host "=========================="
           Write-Host "IP: $env:PUBLIC_IP"
-          Write-Host "User: $env:USER"
-          Write-Host "Pass: $env:PASS"
-          Write-Host "============================="
-          Write-Host "Copy login vào Windows RDP client."
-          Write-Host ""
+          Write-Host "User: runneradmin"
+          Write-Host "Pass: Password123!"
+          Write-Host "=========================="
+          Write-Host "Use Microsoft Remote Desktop to connect."
 
       - name: Keep Alive 8 Hours
         shell: powershell
         run: |
           for ($i = 1; $i -le 480; $i++) {
+            Write-Output "Running minute $i / 480"
             Start-Sleep -Seconds 60
           }
