@@ -9,18 +9,22 @@ jobs:
     timeout-minutes: 480
 
     steps:
-      - name: Install Ngrok
+      - name: Download Ngrok
         run: |
-          Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-stable-windows-amd64.zip -OutFile ngrok.zip
-          Expand-Archive ngrok.zip -DestinationPath .
+          Invoke-WebRequest "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-stable-windows-amd64.zip" -OutFile "ngrok.zip"
+          Expand-Archive "ngrok.zip" -DestinationPath "$env:USERPROFILE\ngrok"
 
       - name: Auth Ngrok
-        run: .\ngrok\ngrok.exe authtoken YOUR_TOKEN_HERE
+        run: |
+          $exe = "$env:USERPROFILE\ngrok\ngrok.exe"
+          & $exe authtoken YOUR_TOKEN_HERE
 
       - name: Enable RDP
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-      - name: Start Tunnel
-        run: .\ngrok\ngrok.exe tcp 3389
+      - name: Start Ngrok Tunnel
+        run: |
+          $exe = "$env:USERPROFILE\ngrok\ngrok.exe"
+          & $exe tcp 3389
