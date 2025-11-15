@@ -26,23 +26,23 @@ jobs:
       - name: Start Tunnel (Expose RDP)
         shell: powershell
         run: |
-          Start-Process -FilePath "./cloudflared.exe" `
-            -ArgumentList "tunnel --url rdp://localhost:3389" `
-            -RedirectStandardOutput "tunnel.log" `
-            -RedirectStandardError "tunnel.log"
+          Start-Job -ScriptBlock {
+              & "$PWD\cloudflared.exe" tunnel --url rdp://localhost:3389
+          }
+          Start-Sleep -Seconds 5
 
       - name: Get Tunnel URL
         shell: powershell
         run: |
-          Start-Sleep -Seconds 8
-          $log = Get-Content "tunnel.log" | Out-String
-          $url = ($log | Select-String "https://.*trycloudflare.com").Matches.Value
-          Write-Output "URL: $url"
+          Get-Content "$env:LOCALAPPDATA\cloudflared\*.log" -ErrorAction SilentlyContinue
+          $logs = Get-Content "$env:LOCALAPPDATA\cloudflared\*.log" -ErrorAction SilentlyContinue | Out-String
+          $url = ($logs | Select-String "https://.*trycloudflare.com").Matches.Value
+          Write-Host "URL: $url"
 
       - name: Keep Alive 8 Hours
         shell: powershell
         run: |
           for ($i = 1; $i -le 480; $i++) {
-            Write-Output "Running minute $i / 480"
+            Write-Host "Running minute $i / 480"
             Start-Sleep -Seconds 60
           }
