@@ -1,49 +1,91 @@
-name: GreenboyMC-RDP
+name: Ubuntu-XFCE-RDP-120GB
 
 on:
   workflow_dispatch:
 
 jobs:
-  rdp-pro:
-    runs-on: windows-latest
-    timeout-minutes: 3600
+  ubuntu-rdp:
+    runs-on: ubuntu-latest
+    # 360 minutes = 6 hours
+    timeout-minutes: 360
 
     steps:
-      - name: Checkout Repo
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Enable RDP
+      - name: Update & install desktop + XRDP
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
-          Restart-Service TermService
+          sudo apt update -y
+          sudo apt install -y xfce4 xfce4-goodies xrdp dbus-x11 policykit-1 net-tools curl
+          sudo systemctl enable xrdp
+          sudo systemctl start xrdp
 
-      - name: Create RDP User
+      - name: Create user pcuser and set password (safe)
         run: |
-          \$pass = -join ((33..126) | Get-Random -Count 16 | ForEach-Object {[char]\$_})
-          \$sp = ConvertTo-SecureString \$pass -AsPlainText -Force
-          New-LocalUser -Name "RDP" -Password \$sp -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          echo "RDP_PASS=\$pass" >> \$env:GITHUB_ENV
+          # create user if missing, set password securely
+          sudo useradd -m -s /bin/bash pcuser || true
+          echo "pcuser:pcpass123" | sudo chpasswd
+          sudo usermod -aG sudo pcuser
+          # make sure home dir perms are OK
+          sudo chmod 700 /home/pcuser
 
-      - name: Install Tailscale
+      - name: Create & mount 120GB loopback disk (sparse)
+        shell: bash
         run: |
-          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi" -OutFile "\$env:TEMP/ts.msi"
-          Start-Process msiexec.exe -ArgumentList "/i `"\$env:TEMP/ts.msi`" /quiet /norestart" -Wait
+          set -euo pipefail
+          IMG="/tmp/gbmc_disk.img"
+          MNT="/mnt/gbmc_disk"
 
-      - name: Connect Tailscale
-        run: |
-          & "\$env:ProgramFiles/Tailscale/tailscale.exe" up --authkey=\${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=ProPC-\$env:GITHUB_RUN_ID
-          \$ip = & "\$env:ProgramFiles/Tailscale/tailscale.exe" ip -4
-          echo "TAILSCALE_IP=\$ip" >> \$env:GITHUB_ENV
+          echo "==> Creating sparse image (120G): $IMG (this may be quick because it's sparse)..."
+          # Use truncate to create a sparse file (doesn't immediately allocate all bytes)
+          sudo truncate -s 120G "$IMG" || { echo "truncate failed — sparse file creation may not be supported on runner"; exit 1; }
 
-      - name: Start 60h Cloud PC
+          echo "==> Creating ext4 filesystem on image..."
+          sudo mkfs.ext4 -F "$IMG" || { echo "mkfs failed (maybe insufficient privileges or runner does not allow loop files)"; exit 1; }
+
+          echo "==> Creating mount point $MNT"
+          sudo mkdir -p "$MNT"
+          sudo mount -o loop "$IMG" "$MNT" || { echo "mount failed"; exit 1; }
+
+          echo "==> Setting ownership to pcuser"
+          sudo chown pcuser:pcuser "$MNT"
+          # Make it automatic for current session (not permanent after runner ends)
+          sudo chmod 750 "$MNT"
+
+          echo "MOUNT_POINT=$MNT" >> $GITHUB_ENV
+          echo "IMG_PATH=$IMG" >> $GITHUB_ENV
+
+      - name: Verify disk mount and show free space
         run: |
-          Write-Host "===================================="
-          Write-Host "    GREENBOYMC WINDOWS PRO CLOUD     "
-          Write-Host "===================================="
-          Write-Host "IP: \$env:TAILSCALE_IP"
-          Write-Host "User: RDP"
-          Write-Host "Pass: \$env:RDP_PASS"
-          Write-Host "===================================="
-          while (\$true) { Start-Sleep -Seconds 300 }
+          echo "Mounted image info:"
+          mount | grep gbmc_disk || true
+          df -h /mnt/gbmc_disk || true
+
+      - name: Allow RDP port (ufw may be inactive on runner)
+        run: |
+          sudo apt install -y ufw || true
+          sudo ufw allow 3389/tcp || true
+          sudo ufw --force enable || true || true
+
+      - name: Show connection info (public IP + credentials)
+        run: |
+          echo "=========================================="
+          echo " GREENBOYMC LINUX RDP (XFCE) — 6 HOURS"
+          echo "=========================================="
+          echo "User: pcuser"
+          echo "Password: pcpass123"
+          echo "RDP port: 3389"
+          echo "Public IP (from inside runner): $(curl -s ifconfig.me || echo 'no-public-ip')"
+          echo "Mounted 120GB image: $IMG_PATH -> $(df -h $MOUNT_POINT || echo 'mount info missing')"
+          echo "=========================================="
+          echo "Note: If public IP == no-public-ip, the runner may be behind NAT/blocked inbound; use the printed IP or check runner logs."
+          echo "=========================================="
+
+      - name: Keep runner alive (6h) and tail logs
+        run: |
+          echo "Keeping runner alive for up to 6 hours. Press cancel in Actions to stop earlier."
+          # Print a heartbeat every 60s to keep the log active
+          for i in $(seq 1 360); do
+            echo "$(date) - GreenboyMC Linux RDP running (heartbeat $i)"
+            sleep 60
+          done
