@@ -1,149 +1,52 @@
-name: RDP
+name: Linux-PC-RDP
 
 on:
   workflow_dispatch:
 
 jobs:
-  secure-rdp:
-    runs-on: windows-latest
-    timeout-minutes: 3600   # 60 tiếng
+  rdp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+    - name: Update system
+      run: |
+        sudo apt update -y
+        sudo apt install xfce4 xfce4-goodies xrdp -y
+        sudo systemctl enable xrdp
+        sudo systemctl start xrdp
 
-      # ================================
-      #  ✔ Cấu hình RDP
-      # ================================
-      - name: Configure Core RDP Settings
-        run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-                            -Name "fDenyTSConnections" -Value 0 -Force
+    - name: Set RDP password
+      run: |
+        echo "pcuser:123456" | sudo chpasswd
+        sudo adduser pcuser sudo
 
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                            -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                            -Name "SecurityLayer" -Value 0 -Force
+    - name: Expand disk to max (≈125GB)
+      run: |
+        sudo growpart /dev/sda 1
+        sudo resize2fs /dev/sda1
 
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          netsh advfirewall firewall add rule name="RDP-Tailscale" `
-              dir=in action=allow protocol=TCP localport=3389
+    - name: Allow RDP port 3389
+      run: |
+        sudo ufw allow 3389/tcp || true
 
-          Restart-Service -Name TermService -Force
+    - name: Show connection info
+      run: |
+        echo "================================="
+        echo "     🎉 LINUX RDP READY 🎉"
+        echo "================================="
+        echo "IP PUBLIC:"
+        curl -s ifconfig.me
+        echo ""
+        echo "USERNAME: pcuser"
+        echo "PASSWORD: 123456"
+        echo "================================="
+        echo ""
+        echo "⏳ PC sẽ chạy trong 6 giờ..."
 
-      # ================================
-      #  ✔ Tạo user RDP random password
-      # ================================
-      - name: Create RDP User with Secure Password
-        run: |
-          Add-Type -AssemblyName System.Security
-
-          $charSet = @{
-            Upper   = [char[]](65..90)
-            Lower   = [char[]](97..122)
-            Number  = [char[]](48..57)
-            Special = ([char[]](33..47) + [char[]](58..64) +
-                       [char[]](91..96) + [char[]](123..126))
-          }
-
-          $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-          $password = -join ($rawPassword | Sort-Object { Get-Random })
-
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-
-          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-
-          echo "RDP_CREDS=$password" >> $env:GITHUB_ENV
-
-      # ================================
-      #  ✔ Cài Tailscale
-      # ================================
-      - name: Install Tailscale
-        run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
-
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i `"$installerPath`" /quiet /norestart" -Wait
-          Remove-Item $installerPath -Force
-
-      # ================================
-      #  ✔ Connect Tailscale
-      # ================================
-      - name: Establish Tailscale Connection
-        run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
-             --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
-             --hostname=gh-runner-$env:GITHUB_RUN_ID
-
-          $tsIP = $null
-          $retries = 0
-
-          while (-not $tsIP -and $retries -lt 10) {
-            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-            Start-Sleep -Seconds 5
-            $retries++
-          }
-
-          if (-not $tsIP) {
-            Write-Error "Tailscale IP not assigned."
-            exit 1
-          }
-
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-
-      # ================================
-      #  ✔ Kiểm tra cổng 3389
-      # ================================
-      - name: Verify RDP Accessibility
-        run: |
-          $result = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
-          if (-not $result.TcpTestSucceeded) {
-            Write-Error "RDP port blocked!"
-            exit 1
-          }
-
-      # ================================
-      #  ✔ Đặt wallpaper
-      # ================================
-      - name: Install wallpaper
-        shell: pwsh
-        run: |
-          $repoImg = Join-Path $env:GITHUB_WORKSPACE ".github/images/wallpaper.jpg"
-
-          if (-not (Test-Path $repoImg)) {
-            Write-Error "❌ Không tìm thấy ảnh wallpaper tại: $repoImg"
-            exit 1
-          }
-
-          $destPath = "C:\Users\Public\wall.jpg"
-          Copy-Item $repoImg $destPath -Force
-
-          Set-ItemProperty -Path "HKCU:\Control Panel\Desktop\" -Name wallpaper -Value $destPath
-          rundll32.exe user32.dll, UpdatePerUserSystemParameters
-
-      # ================================
-      #  ✔ Giữ máy chạy 60 tiếng + Banner GREENBOYMC
-      # ================================
-      - name: Maintain Connection (GreenboyMC Banner)
-        run: |
-          Write-Host ""
-          Write-Host "🌐 GREENBOYMC CLOUD PC ONLINE 60 HOURS 🌐"
-          Write-Host "============ RDP LOGIN ============"
-          Write-Host "IP: $env:TAILSCALE_IP"
-          Write-Host "USER: RDP"
-          Write-Host "PASS: $env:RDP_CREDS"
-          Write-Host "==================================="
-          Write-Host ""
-
-          while ($true) {
-            Write-Host "[$(Get-Date)] PC đang chạy chế độ 60 tiếng..."
-            Start-Sleep -Seconds 300
-          }
-
+    - name: Keep alive
+      run: |
+        while true; do
+          echo "RUNNING $(date)"
+          sleep 300
+        done
