@@ -1,62 +1,59 @@
-name: Windows RDP via Tailscale (Fixed 120GB)
+name: Windows RDP Auto PC
 
 on:
   workflow_dispatch:
 
 jobs:
-  win-rdp:
+  build:
     runs-on: windows-latest
-    timeout-minutes: 3600
 
     steps:
-      - name: Enable RDP
-        run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-                            -Name "fDenyTSConnections" -Value 0 -Force
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+    - name: Enable RDP
+      run: |
+        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-      - name: Create RDP User
-        shell: pwsh
-        run: |
-          $Password = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 14 | % {[char]$_})
-          $Secure = ConvertTo-SecureString $Password -AsPlainText -Force
-          New-LocalUser -Name "RDP" -Password $Secure
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          echo "RDP_PASS=$Password" | Out-File -Append $env:GITHUB_ENV
+    - name: Create RDP User
+      run: |
+        $user="vanlong"
+        $pass="VanLong@123"
+        net user $user $pass /add
+        net localgroup administrators $user /add
 
-      - name: Prepare 120GB Storage
-        shell: pwsh
-        run: |
-          if (!(Test-Path "D:\")) { Write-Error "D: drive missing"; exit 1 }
-          Write-Host "✔ 120GB D: drive available!"
-          New-Item -ItemType Directory -Force -Path "D:\RDP-Storage" | Out-Null
+    - name: Install Chocolatey
+      shell: powershell
+      run: |
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+        [System.Net.ServicePointManager]::SecurityProtocol = 'Tls12'
+        Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
 
-      - name: Install Tailscale
-        run: |
-          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
-          $file = "$env:TEMP\ts.msi"
-          Invoke-WebRequest -Uri $url -OutFile $file
-          Start-Process msiexec.exe -ArgumentList "/i `"$file`" /quiet /norestart" -Wait
+    - name: Install Common Software
+      shell: powershell
+      run: |
+        choco install -y googlechrome
+        choco install -y firefox
+        choco install -y vscodium
+        choco install -y nodejs
+        choco install -y python
+        choco install -y git
+        choco install -y 7zip
+        choco install -y winrar
+        choco install -y dotnet
+        choco install -y vcredist-all
 
-      - name: Connect to Tailscale
-        run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=GH-RDP-${{ github.run_id }}
+    - name: Set Wallpaper
+      shell: powershell
+      run: |
+        Invoke-WebRequest "https://i.imgur.com/8OZJg4R.jpeg" -OutFile "C:\wall.jpg"
+        reg add "HKCU\Control Panel\Desktop" /v Wallpaper /t REG_SZ /d "C:\wall.jpg" /f
+        rundll32.exe user32.dll, UpdatePerUserSystemParameters
 
-          $tsIP = ""
-          for ($i=0; $i -lt 20 -and !$tsIP; $i++) {
-            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-            Start-Sleep 3
-          }
-
-          echo "TAILSCALE_IP=$tsIP" | Out-File -Append $env:GITHUB_ENV
-
-      - name: Keep Alive (GreenboyMC)
-        run: |
-          Write-Host "==========================================="
-          Write-Host "     WINDOWS RDP ONLINE (TAILSCALE)"
-          Write-Host "==========================================="
-          Write-Host "IP        : $env:TAILSCALE_IP"
-          Write-Host "User      : RDP"
-          Write-Host "Password  : $env:RDP_PASS"
-          Write-Host "==========================================="
-          while ($true) { Start-Sleep 300 }
+    - name: Display Login Info
+      shell: powershell
+      run: |
+        Write-Host "==============================="
+        Write-Host "      WINDOWS RDP READY"
+        Write-Host "==============================="
+        Write-Host "User: vanlong"
+        Write-Host "Pass: VanLong@123"
+        Write-Host "RDP IP: (check Actions → Logs)"
